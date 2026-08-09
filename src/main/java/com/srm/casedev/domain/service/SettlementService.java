@@ -1,15 +1,20 @@
 package com.srm.casedev.domain.service;
 
-import com.srm.casedev.domain.entity.*;
+import com.srm.casedev.domain.entity.Currency;
+import com.srm.casedev.domain.entity.ExchangeRate;
+import com.srm.casedev.domain.entity.Receivable;
+import com.srm.casedev.domain.entity.Settlement;
+import com.srm.casedev.domain.entity.SettlementStatus;
+import com.srm.casedev.domain.repository.CurrencyRepository;
 import com.srm.casedev.domain.repository.ExchangeRateRepository;
 import com.srm.casedev.domain.repository.ReceivableRepository;
 import com.srm.casedev.domain.repository.SettlementRepository;
 import com.srm.casedev.domain.service.pricing.PricingStrategy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import com.srm.casedev.domain.repository.CurrencyRepository;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
@@ -17,30 +22,31 @@ import java.time.temporal.ChronoUnit;
 @Service
 public class SettlementService {
 
-    private final CurrencyRepository currencyRepository;
     private final ReceivableRepository receivableRepository;
     private final ExchangeRateRepository exchangeRateRepository;
     private final SettlementRepository settlementRepository;
+    private final CurrencyRepository currencyRepository;
     private final PricingStrategy pricingStrategy;
-    private static final BigDecimal BASE_RATE = new BigDecimal("0.01");
 
     public SettlementService(
-            CurrencyRepository currencyRepository, ReceivableRepository receivableRepository,
+            ReceivableRepository receivableRepository,
             ExchangeRateRepository exchangeRateRepository,
             SettlementRepository settlementRepository,
-            PricingStrategy pricingStrategy) {
-        this.currencyRepository = currencyRepository;
-
+            CurrencyRepository currencyRepository,
+            PricingStrategy pricingStrategy
+    ) {
         this.receivableRepository = receivableRepository;
         this.exchangeRateRepository = exchangeRateRepository;
         this.settlementRepository = settlementRepository;
+        this.currencyRepository = currencyRepository;
         this.pricingStrategy = pricingStrategy;
     }
 
     @Transactional
     public Settlement settle(
             Long receivableId,
-            Long paymentCurrencyId
+            Long paymentCurrencyId,
+            BigDecimal baseRate
     ) {
 
         Receivable receivable = receivableRepository.findById(receivableId)
@@ -49,6 +55,7 @@ public class SettlementService {
                                 "Receivable not found: " + receivableId
                         )
                 );
+
         Currency paymentCurrency = currencyRepository.findById(paymentCurrencyId)
                 .orElseThrow(() ->
                         new IllegalArgumentException(
@@ -56,9 +63,33 @@ public class SettlementService {
                         )
                 );
 
-        BigDecimal exchangeRate = BigDecimal.ONE;
+        BigDecimal spreadRate = receivable
+                .getReceivableType()
+                .getSpreadRate();
 
-        if (!receivable.getCurrency().getId().equals(paymentCurrency.getId())) {
+        long termInMonths = Math.max(
+                0,
+                ChronoUnit.MONTHS.between(
+                        LocalDate.now(),
+                        receivable.getDueDate()
+                )
+        );
+
+        BigDecimal presentValue = pricingStrategy.calculatePresentValue(
+                receivable.getFaceValue(),
+                baseRate,
+                spreadRate,
+                termInMonths
+        );
+
+        BigDecimal exchangeRate = null;
+        BigDecimal settledAmount = presentValue;
+
+        boolean crossCurrency =
+                !receivable.getCurrency().getId()
+                        .equals(paymentCurrency.getId());
+
+        if (crossCurrency) {
 
             ExchangeRate rate = exchangeRateRepository
                     .findTopByFromCurrencyIdAndToCurrencyIdOrderByEffectiveAtDesc(
@@ -67,38 +98,26 @@ public class SettlementService {
                     )
                     .orElseThrow(() ->
                             new IllegalArgumentException(
-                                    "Exchange rate not found"
+                                    "Exchange rate not found for "
+                                            + receivable.getCurrency().getCode()
+                                            + " to "
+                                            + paymentCurrency.getCode()
                             )
                     );
 
             exchangeRate = rate.getRate();
+
+            settledAmount = presentValue
+                    .multiply(exchangeRate)
+                    .setScale(6, RoundingMode.HALF_UP);
         }
-
-        BigDecimal spreadRate =
-                receivable.getReceivableType().getSpreadRate();
-
-        long termInMonths = ChronoUnit.MONTHS.between(
-                LocalDate.now().withDayOfMonth(1),
-                receivable.getDueDate().withDayOfMonth(1)
-        );
-
-        termInMonths = Math.max(termInMonths, 1);
-
-        BigDecimal presentValue =
-                pricingStrategy.calculatePresentValue(
-                        receivable.getFaceValue(),
-                        BASE_RATE,
-                        spreadRate,
-                        termInMonths
-                );
-        BigDecimal settledAmount = presentValue.multiply(exchangeRate);
 
         Settlement settlement = new Settlement();
 
         settlement.setReceivable(receivable);
         settlement.setPaymentCurrency(paymentCurrency);
         settlement.setExchangeRate(exchangeRate);
-        settlement.setBaseRate(BASE_RATE);
+        settlement.setBaseRate(baseRate);
         settlement.setSpreadRate(spreadRate);
         settlement.setPresentValue(presentValue);
         settlement.setSettledAmount(settledAmount);
@@ -108,7 +127,4 @@ public class SettlementService {
 
         return settlementRepository.save(settlement);
     }
-
-
-
 }
