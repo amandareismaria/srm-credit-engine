@@ -83,7 +83,7 @@ public class Receivable {
     )
     private LocalDateTime updatedAt;
 
-    protected Receivable() {
+    public Receivable() {
     }
 
     public Receivable(
