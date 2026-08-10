@@ -49,6 +49,12 @@ public class SettlementService {
             BigDecimal baseRate
     ) {
 
+        if (settlementRepository.existsByReceivableId(receivableId)) {
+            throw new IllegalStateException(
+                    "Receivable already settled: " + receivableId
+            );
+        }
+
         Receivable receivable = receivableRepository.findById(receivableId)
                 .orElseThrow(() ->
                         new IllegalArgumentException(
