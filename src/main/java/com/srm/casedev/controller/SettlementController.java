@@ -3,7 +3,6 @@ package com.srm.casedev.controller;
 import com.srm.casedev.api.dto.settlement.SettlementResponse;
 import com.srm.casedev.domain.entity.Settlement;
 import com.srm.casedev.domain.service.SettlementService;
-
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -16,7 +15,9 @@ public class SettlementController {
 
     private final SettlementService settlementService;
 
-    public SettlementController(SettlementService settlementService) {
+    public SettlementController(
+            SettlementService settlementService
+    ) {
         this.settlementService = settlementService;
     }
 
